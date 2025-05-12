@@ -12,7 +12,7 @@ PODS:
   - shared_preferences_foundation (0.0.1):
     - Flutter
     - FlutterMacOS
-  - vibration (1.7.5):
+  - vibration (3.0.0):
     - Flutter
 
 DEPENDENCIES:
@@ -41,13 +41,13 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/vibration/ios"
 
 SPEC CHECKSUMS:
-  audioplayers_darwin: ccf9c770ee768abb07e26d90af093f7bab1c12ab
-  device_info_plus: 21fcca2080fbcd348be798aa36c3e5ed849eefbe
+  audioplayers_darwin: 877d9a4d06331c5c374595e46e16453ac7eafa40
+  device_info_plus: bf2e3232933866d73fe290f2942f2156cdd10342
   Flutter: e0871f40cf51350855a761d2e70bf5af5b9b5de7
-  path_provider_foundation: 080d55be775b7414fd5a5ef3ac137b97b097e564
-  sensors_plus: 1c5f0a01ce21c609a4df404c4e6879d62bce287f
-  shared_preferences_foundation: 9e1978ff2562383bd5676f64ec4e9aa8fa06a6f7
-  vibration: 8e2f50fc35bb736f9eecb7dd9f7047fbb6a6e888
+  path_provider_foundation: 2b6b4c569c0fb62ec74538f866245ac84301af46
+  sensors_plus: 42b9de1b8237675fa8d8121e4bb93be0f79fa61d
+  shared_preferences_foundation: fcdcbc04712aee1108ac7fda236f363274528f78
+  vibration: 3797858f8cbf53d841e189ef8bd533d96e4ca93c
 
 PODFILE CHECKSUM: 6e700dec67e6deac9b1c69bb14c49a2217a12d15
 

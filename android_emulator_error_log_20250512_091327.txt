@@ -1,0 +1,6 @@
+=== Androidエミュレータ実行エラーログ ===
+日時: 2025-05-12 09:13:27
+Flutterバージョン: Flutter 3.29.3 • channel stable • https://github.com/flutter/flutter.git
+エミュレータ: Pixel_3a_API_34_extension_level_7_x86_64 (Android API 34)
+エラーメッセージ:
+name 'run_command' is not defined
