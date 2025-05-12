@@ -20,7 +20,13 @@ def detect_java_gradle_incompatibility(error_message):
     keywords = [
         "Unsupported class file major version",
         "incompatible with the Java version",
-        "Your project's Gradle version is incompatible with the Java"
+        "Your project's Gradle version is incompatible with the Java",
+        "Gradle version is too old",
+        "The Android Gradle plugin supports only",
+        "requires Java 11 to run",
+        "Execution failed for task",
+        "Gradle build daemon disappeared",
+        "Unable to find a matching variant of"
     ]
     
     for keyword in keywords:
@@ -158,7 +164,7 @@ def fix_java_gradle_compatibility():
         # すべてのディストリビューションタイプ（bin, all, etc）をサポート
         current_dist_type = 'bin'
         dist_match = re.search(r'gradle-[0-9.]+-([^\.]+)\.zip', content)
-        if dist_match:
+        if (dist_match):
             current_dist_type = dist_match.group(1)
         
         # URL形式を保持しながらバージョンのみ更新
@@ -490,10 +496,12 @@ def fix_ndk_version(build_error_output, verbose=False):
             
             # ndkVersionが存在するか確認して更新または追加
             if 'ndkVersion' in content:
-                content = re.sub(r'ndkVersion[\s\t]*[\'"]([^\'"]+)[\'"]', f'ndkVersion "{required_ndk_version}"', content)
+                content = re.sub(r'ndkVersion\s*[\'"]([^\'"]+)[\'"]', f'ndkVersion "{required_ndk_version}"', content)
             else:
+                # androidブロックにndkVersionを追加
                 content = re.sub(r'android\s*\{', f'android {{\n    ndkVersion "{required_ndk_version}"', content)
             
+            # 修正したcontentをファイルに書き戻す
             with open(app_build_gradle, 'w') as f:
                 f.write(content)
             
@@ -588,6 +596,319 @@ def build_apk(output_dir=None, build_type="release", verbose=False):
         print("\n⚠️ APKファイルが見つかりません")
         return False
 
+def detect_gradle_cache_issue(error_message):
+    """Gradleキャッシュ問題を検出する"""
+    keywords = [
+        "Could not read workspace metadata from",
+        "metadata.bin",
+        "Error resolving plugin [id: 'dev.flutter.flutter-plugin-loader'",
+        "Multiple build operations failed"
+    ]
+    
+    for keyword in keywords:
+        if keyword in error_message:
+            return True
+    return False
+
+def clean_gradle_cache(thorough=False):
+    """Gradleキャッシュをクリアする"""
+    print("\n🧹 Gradleキャッシュをクリアしています...")
+    
+    # ユーザーのホームディレクトリを取得
+    home_dir = os.path.expanduser("~")
+    
+    # クリアするキャッシュディレクトリのリスト
+    cache_dirs = [
+        # プロジェクトディレクトリ内のキャッシュ
+        os.path.join(os.getcwd(), 'android', '.gradle'),
+        os.path.join(os.getcwd(), 'android', 'build'),
+        os.path.join(os.getcwd(), 'android', 'app', 'build'),
+        os.path.join(os.getcwd(), 'android', 'app', '.gradle'),
+        os.path.join(os.getcwd(), 'build'),
+        os.path.join(os.getcwd(), '.gradle'),
+    ]
+    
+    # より徹底的なクリーニングの場合、グローバルキャッシュも含める
+    if thorough:
+        cache_dirs.extend([
+            os.path.join(home_dir, '.gradle', 'caches', '8.10.2', 'transforms'),  # 特定のバージョンのtransformsを削除
+            os.path.join(home_dir, '.gradle', 'caches', '8.10.2'),  # 特定のバージョンを完全に削除
+            os.path.join(home_dir, '.gradle', 'daemon'),
+            os.path.join(home_dir, '.gradle', 'wrapper', 'dists'),
+            os.path.join(home_dir, '.android', 'build-cache'),
+        ])
+    
+    success_count = 0
+    fail_count = 0
+    
+    for cache_dir in cache_dirs:
+        if os.path.exists(cache_dir):
+            try:
+                print(f"  削除中: {cache_dir}")
+                shutil.rmtree(cache_dir)
+                success_count += 1
+            except Exception as e:
+                print(f"  ⚠️ 削除失敗: {cache_dir} - {e}")
+                fail_count += 1
+                
+                # metadata.binファイルを特に重点的に削除
+                if 'caches' in cache_dir or 'transforms' in cache_dir:
+                    try:
+                        print(f"  🔍 metadata.binファイルを個別に削除しています...")
+                        metadata_files_deleted = 0
+                        for root, dirs, files in os.walk(cache_dir):
+                            for file in files:
+                                if file == 'metadata.bin':
+                                    try:
+                                        metadata_path = os.path.join(root, file)
+                                        os.remove(metadata_path)
+                                        metadata_files_deleted += 1
+                                    except Exception as e_file:
+                                        pass
+                        if metadata_files_deleted > 0:
+                            print(f"    ✅ {metadata_files_deleted}個のmetadata.binファイルを削除しました")
+                    except Exception as e_walk:
+                        pass
+    
+    print(f"\n✅ キャッシュクリア完了: {success_count}個のディレクトリを削除（{fail_count}個は失敗）")
+    
+    # 後処理として必要なディレクトリを再作成
+    os.makedirs(os.path.join(os.getcwd(), 'android', '.gradle'), exist_ok=True)
+    
+    return success_count > 0
+
+def fix_gradle_plugin_loader_issue():
+    """Flutter plugin-loaderの問題を修正"""
+    print("\n🔧 Flutter Plugin Loaderの問題を修正しています...")
+    
+    android_dir = os.path.join(os.getcwd(), 'android')
+    settings_gradle_kts = os.path.join(android_dir, 'settings.gradle.kts')
+    settings_gradle = os.path.join(android_dir, 'settings.gradle')
+    
+    # Kotlin DSLファイルをGroovyに変換
+    if os.path.exists(settings_gradle_kts):
+        try:
+            # バックアップを作成
+            backup_file = f"{settings_gradle_kts}.bak"
+            shutil.copy2(settings_gradle_kts, backup_file)
+            print(f"💾 バックアップを作成しました: {backup_file}")
+            
+            # 元のKotlin DSLファイルを無効化
+            os.rename(settings_gradle_kts, f"{settings_gradle_kts}.disabled")
+            print(f"✅ {settings_gradle_kts} を無効化しました")
+        except Exception as e:
+            print(f"⚠️ settings.gradle.kts の無効化中にエラー: {e}")
+    
+    # 新しいGroovy形式のsettings.gradleを作成
+    try:
+        with open(settings_gradle, 'w') as f:
+            f.write('''// Flutter Androidプロジェクト用の標準settings.gradle
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+include ':app'
+
+def flutterProjectRoot = rootProject.projectDir.parentFile
+def plugins = new Properties()
+def pluginsFile = new File(flutterProjectRoot, '.flutter-plugins')
+if (pluginsFile.exists()) {
+    pluginsFile.withReader('UTF-8') { reader -> plugins.load(reader) }
+}
+
+plugins.each { name, path ->
+    def pluginDirectory = new File(flutterProjectRoot, path).getAbsoluteFile()
+    if (pluginDirectory.exists()) {
+        def androidPluginDirectory = new File(pluginDirectory, "android")
+        if (androidPluginDirectory.exists()) {
+            include ":" + name
+            project(":" + name).projectDir = androidPluginDirectory
+        }
+    }
+}
+
+def localPropertiesFile = new File(rootProject.projectDir, "local.properties")
+def properties = new Properties()
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withReader("UTF-8") { reader -> properties.load(reader) }
+}
+
+def flutterSdkPath = properties.getProperty("flutter.sdk")
+assert flutterSdkPath != null, "flutter.sdk not set in local.properties"
+apply from: "$flutterSdkPath/packages/flutter_tools/gradle/app_plugin_loader.gradle"
+''')
+        print(f"✅ 新しい {settings_gradle} を作成しました")
+    except Exception as e:
+        print(f"⚠️ settings.gradle の作成中にエラー: {e}")
+    
+    # ローカルプロパティが存在することを確認
+    local_props = os.path.join(android_dir, 'local.properties')
+    if not os.path.exists(local_props):
+        # Flutterのパスを取得
+        flutter_path = ""
+        try:
+            flutter_path_result = run_command("which flutter", "Flutter path", show_output=False)
+            if flutter_path_result[0]:
+                flutter_path = os.path.dirname(os.path.dirname(flutter_path_result[1].decode('utf-8').strip()))
+        except:
+            # フォールバック: 環境変数からFlutterのパスを取得
+            if "FLUTTER_ROOT" in os.environ:
+                flutter_path = os.environ["FLUTTER_ROOT"]
+            else:
+                # Flutter SDKのパスをflutterコマンドから取得
+                try:
+                    flutter_info = run_command("flutter doctor -v", "Flutter info", show_output=False)
+                    if flutter_info[0]:
+                        for line in flutter_info[1].decode('utf-8').split('\n'):
+                            if "Flutter version" in line and "at " in line:
+                                flutter_path = line.split("at ")[-1].strip()
+                                break
+                except:
+                    pass
+        
+        if flutter_path:
+            try:
+                with open(local_props, 'w') as f:
+                    f.write(f'''sdk.dir={os.path.join(os.environ.get('HOME', ''), 'Library', 'Android', 'sdk')}
+flutter.sdk={flutter_path}
+flutter.buildMode=debug
+flutter.versionName=1.0.0
+flutter.versionCode=1
+''')
+                print(f"✅ {local_props} を作成しました")
+            except Exception as e:
+                print(f"⚠️ local.properties の作成中にエラー: {e}")
+    
+    # build.gradleの修正（必要な場合）
+    root_gradle = os.path.join(android_dir, 'build.gradle')
+    if os.path.exists(root_gradle):
+        try:
+            with open(root_gradle, 'r') as f:
+                content = f.read()
+            
+            # リポジトリ設定を追加・更新
+            if not "mavenCentral()" in content or not "google()" in content:
+                # リポジトリ設定が不足している場合は追加
+                updated_content = re.sub(
+                    r'buildscript\s*\{\s*repositories\s*\{',
+                    '''buildscript {
+    repositories {
+        google()
+        mavenCentral()''',
+                    content
+                )
+                
+                # allprojectsセクションにも同様の設定を追加
+                if "allprojects" in updated_content:
+                    updated_content = re.sub(
+                        r'allprojects\s*\{\s*repositories\s*\{',
+                        '''allprojects {
+    repositories {
+        google()
+        mavenCentral()''',
+                        updated_content
+                    )
+                
+                with open(root_gradle, 'w') as f:
+                    f.write(updated_content)
+                print("✅ build.gradleのリポジトリ設定を更新しました")
+        except Exception as e:
+            print(f"⚠️ build.gradleの更新中にエラー: {e}")
+    
+    # Gradleラッパーの再生成
+    try:
+        # Gradleラッパーが存在するか確認
+        gradle_wrapper_jar = os.path.join(android_dir, 'gradle', 'wrapper', 'gradle-wrapper.jar')
+        if not os.path.exists(gradle_wrapper_jar):
+            print("🔧 Gradleラッパーを再生成しています...")
+            current_dir = os.getcwd()
+            os.chdir(android_dir)
+            
+            # Gradleコマンドが使用可能かチェック
+            gradle_exists = False
+            try:
+                gradle_check = run_command("gradle --version", "Gradleバージョン確認", show_output=False)
+                gradle_exists = gradle_check[0]
+            except:
+                gradle_exists = False
+            
+            if gradle_exists:
+                run_command("gradle wrapper --gradle-version 7.5", "Gradleラッパー7.5の生成", show_output=False)
+            else:
+                # Gradleが利用不可の場合、wrapper-最小セットを手動で作成
+                os.makedirs(os.path.join(android_dir, 'gradle', 'wrapper'), exist_ok=True)
+                with open(os.path.join(android_dir, 'gradle', 'wrapper', 'gradle-wrapper.properties'), 'w') as f:
+                    f.write('''distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+distributionUrl=https\\://services.gradle.org/distributions/gradle-7.5-all.zip
+''')
+                # Gradlewスクリプトを配置
+                create_gradlew_script(android_dir)
+                
+            os.chdir(current_dir)
+            print("✅ Gradleラッパーを再生成しました")
+    except Exception as e:
+        print(f"⚠️ Gradleラッパーの再生成中にエラー: {e}")
+    
+    return True
+
+def create_gradlew_script(android_dir):
+    """Gradlewスクリプトを生成（最小バージョン）"""
+    # Gradlewファイルを生成
+    with open(os.path.join(android_dir, 'gradlew'), 'w') as f:
+        f.write('''#!/usr/bin/env sh
+# Gradleスクリプト最小バージョン
+
+exec "$JAVACMD" "$@"
+''')
+    os.chmod(os.path.join(android_dir, 'gradlew'), 0o755)
+    
+    # Gradlew.batファイルを生成
+    with open(os.path.join(android_dir, 'gradlew.bat'), 'w') as f:
+        f.write('''@rem Gradleスクリプト最小バージョン
+@echo off
+"%JAVA_EXE%" %*
+''')
+    
+    print("✅ 基本的なgradlewスクリプトを作成しました")
+
+def auto_fix_gradle_issues(verbose=False):
+    """Gradleの問題を自動的に修正する（ビルド前の事前対策）"""
+    print("\n🔧 Androidビルド前にGradle問題を事前修正しています...")
+    
+    android_dir = os.path.join(os.getcwd(), 'android')
+    settings_gradle_kts = os.path.join(android_dir, 'settings.gradle.kts')
+    
+    # 修正作業を実施
+    fixed = False
+    
+    # 1. Kotlin DSLファイルをGroovyに変換（最も一般的な問題）
+    if os.path.exists(settings_gradle_kts):
+        print("📝 Kotlin DSLファイルを検出 - Groovyへ変換します...")
+        fix_gradle_plugin_loader_issue()
+        fixed = True
+    
+    # 2. キャッシュクリア（軽量版）
+    cache_cleaned = clean_gradle_cache(thorough=False)
+    if cache_cleaned:
+        fixed = True
+    
+    # 3. Flutter pub getを実行してプロジェクトの依存関係を更新
+    pub_get_result = run_command("flutter pub get", "Flutter パッケージ更新", show_output=verbose)
+    
+    if fixed:
+        print("✅ Gradleビルド前の事前修正を完了しました")
+    else:
+        print("✓ Gradle設定に問題は見つかりませんでした")
+    
+    return fixed
+
 def main():
     """メイン実行関数"""
     # カレントディレクトリをプロジェクトのルートに変更（安全のため）
@@ -602,6 +923,7 @@ def main():
     parser.add_argument('--apk-output', type=str, help='APKファイルの出力ディレクトリ', default="apk_output")
     parser.add_argument('--apk-type', type=str, choices=['debug', 'profile', 'release'], 
                         default='release', help='APKのビルドタイプ (debug/profile/release)')
+    parser.add_argument('--fix-gradle', action='store_true', help='Gradleキャッシュ問題を修正する')
     args = parser.parse_args()
     
     print("=== ジャイロスコープアプリ Android エミュレータ 自動ビルド＆実行スクリプト ===")
@@ -636,6 +958,14 @@ def main():
         apk_result = build_apk(args.apk_output, args.apk_type, args.verbose)
         return 0 if apk_result else 1
     
+    # Gradleキャッシュ問題修正フラグがある場合
+    if args.fix_gradle:
+        print("\n🔧 Gradleキャッシュ問題の修正を実行します...")
+        clean_gradle_cache(thorough=True)
+        fix_gradle_plugin_loader_issue()
+        print("\n✅ Gradleキャッシュ問題の修正が完了しました。再度実行してください。")
+        return 0
+    
     # 利用可能なエミュレータの一覧を取得
     emulators = get_available_emulators()
     print_emulator_list(emulators)
@@ -661,6 +991,9 @@ def main():
         # build.gradle.ktsの修正を試みる（NDKバージョン問題の修正）
         gradle_fix_result = fix_build_gradle_kts()
         
+        # ★★追加: ビルド前にGradle問題を自動修正★★
+        auto_fix_gradle_issues(args.verbose)
+        
         # アプリの実行を試みる前にJavaバージョンを確認
         java_info = get_java_version_info()
         print(f"\n🔍 Javaバージョンを確認: {java_info}")
@@ -685,6 +1018,7 @@ def main():
             kotlin_dsl_error = "Kotlin DSL" in build_error_output or ".kts" in build_error_output
             java_gradle_error = "Unsupported class file major version" in build_error_output or "incompatible with the Java" in build_error_output
             ndk_version_error = "Your project is configured with Android NDK" in build_error_output and "requires Android NDK" in build_error_output
+            gradle_cache_error = detect_gradle_cache_issue(build_error_output)
             
             # エラーの重大度に応じた修復フローを実行
             android_dir = os.path.join(os.getcwd(), 'android')
@@ -732,8 +1066,8 @@ def main():
                         # androidブロックにndkVersionを追加
                         content = re.sub(r'android\s*\{', f'android {{\n    ndkVersion "{required_ndk_version}"', content)
                     
-                    with open(app_build_gradle, 'w') as f:
-                        f.write(content)
+                        with open(app_build_gradle, 'w') as f:
+                            f.write(content)
                     
                     print(f"✅ {app_build_gradle} のNDKバージョンを {required_ndk_version} に設定しました")
                 
@@ -788,7 +1122,20 @@ def main():
                     print("\n✨ プラグイン修正後、アプリの実行が成功しました")
                     return 0
             
-            # 4. 最後の手段：Android ディレクトリの完全再構築
+            # 4. Gradleキャッシュの問題を修正 - より積極的に徹底クリーニングを実施
+            if gradle_cache_error:
+                print("\n🔍 Gradleキャッシュの問題を検出しました...")
+                print("🧹 徹底的なキャッシュクリーニングを実行します...")
+                clean_gradle_cache(thorough=True)
+                fix_gradle_plugin_loader_issue()
+                tried_fixes.append("Gradleキャッシュ修正")
+                
+                print("\n🔄 Gradleキャッシュ修正後に再ビルドを実行します...")
+                if build_and_run_android_emulator(selected_emulator['name'], args.verbose, False):
+                    print("\n✨ Gradleキャッシュ修正後、アプリの実行が成功しました")
+                    return 0
+            
+            # 5. 最後の手段：Android ディレクトリの完全再構築
             if len(tried_fixes) > 0:
                 print(f"\n⚠️ 試した修正 ({', '.join(tried_fixes)}) では問題が解決しませんでした")
                 print("\n🚨 最終手段：Androidディレクトリを完全に再構築します...")
